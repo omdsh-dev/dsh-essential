@@ -10,14 +10,7 @@
 
 ## 安装
 
-本包是一个 DSH bundle，自带 `cordis.patch.yml` 和会话菜单扩展槽补丁。DeepSeek Harness `0.1.0-rc.5` 仍由 `ui-workspace` 内部持有会话行操作，因此第一次集成时先在 `deepseek-harness` 源码仓库应用该插槽补丁并重新构建：
-
-```sh
-git -C /path/to/DSH apply /path/to/dsh-essential/patches/session-menu-slot.patch
-cd /path/to/DSH && pnpm run build
-```
-
-若宿主版本已经提供 `sidebar.workspaces.sessionMenu` 槽，则跳过这一步。然后从已构建的 Harness CLI 安装到 Web profile：
+本包是一个自包含的 DSH bundle，自带 `cordis.patch.yml`，不需要修改或重新构建 DeepSeek Harness 源码。直接从已构建的 Harness CLI 安装到 Web profile：
 
 ```sh
 node /path/to/DSH/apps/cli/lib/bin.js plugin --profile web add /path/to/dsh-essential
@@ -41,6 +34,8 @@ node /path/to/DSH/apps/cli/lib/bin.js plugin --profile web add /path/to/dsh-esse
 ## 使用
 
 在会话列表中打开目标会话右侧的 `…` 菜单，选择“删除对话”。Web 会显示标题为“确认删除该对话吗？”的站内卡片，并提供“取消 / 删除对话”操作；不再使用浏览器原生弹窗。确认后通过不依赖活跃 Agent 的根级 Remote 提交目标会话的删除请求，并在请求成功后立即归档该 Session，使历史会话和当前会话都能从所有会话分组中隐藏。取消确认不会发出请求。
+
+在 Harness 提供公开的会话菜单槽之前，插件会观察语义化的 Session 树行，并从 document 级稳定控制器把 React 操作 Portal 到宿主菜单 DOM。控制器不会随宿主菜单自动收起而销毁，因此确认卡片不会跟着菜单子树一起消失。pointer 边界桥会把跨 React 根进入“删除对话”的移动保留在宿主菜单内；若浏览器没有提供 `relatedTarget`，进入删除项时还会显式取消宿主的 pointer grace，同时继续支持真正移出菜单后的正常自动收起。目标身份优先从该行的 React owner 读取；唯一可见标题匹配只作为安全后备。若标题存在歧义，插件不会显示破坏性操作，避免误删错误会话。
 
 删除进行中，确认卡片会锁定关闭与操作按钮，将主按钮改为“正在删除…”，并显示进度；请求失败或“已排队但暂时无法隐藏”的部分成功状态会直接显示在卡片中。完全成功时，会话行消失即为结果反馈，不再额外弹出成功提示。
 
@@ -94,7 +89,6 @@ pnpm run typecheck
 pnpm test
 pnpm run build
 pnpm run prepare
-git -C ../deepseek-harness apply --check "$PWD/patches/session-menu-slot.patch"
 ```
 
 ## Model Experience
@@ -119,4 +113,4 @@ git -C ../deepseek-harness apply --check "$PWD/patches/session-menu-slot.patch"
 - **日志移动在重启后生效**——会话行会立即通过持久归档投影隐藏，但当前进程不会移动目标日志；这避免绕过 Agent 所有权与持久化协调器。
 - **不是永久擦除**——日志被移动到恢复垃圾箱；保留期和最终清理属于部署管理员策略。
 - **不级联清理 sidecar**——消息反馈等独立存储可能保留孤立行；当前 Session 持久化没有跨域删除事务。
-- **需要宿主菜单槽**——DeepSeek Harness `0.1.0-rc.5` 必须先应用随包附带的 `session-menu-slot.patch`；宿主原生提供同名槽后不再需要补丁。
+- **DOM 兼容边界**——在 Harness 提供公开会话菜单槽之前，菜单操作依赖语义化 Session 行/菜单 DOM 与隔离的 React owner 查询。未来宿主若同时改变这些结构，插件会安全地停止注入菜单项，人工命令仍可使用。

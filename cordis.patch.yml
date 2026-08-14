@@ -9,7 +9,10 @@
 # deletion requests have been recovered. Row-level inject is additive to the
 # workspace plugin's own storageDomain/sessionPersistence requirements. The
 # browser half uses the plugin's root-scoped Remote (historical rows do not
-# require a live Agent), shared Web Modal primitives for confirmation, and the
-# standard workspaces service to archive a queued Session immediately.
+# require a live Agent), observes the Host's semantic Session menu DOM, portals
+# its action from a stable document-level controller, bridges and actively
+# cancels false Host pointer-leave grace across React roots, uses shared Web
+# Modal primitives for confirmation, and archives a queued Session immediately
+# through the standard workspaces service.
 - id: workspace
   inject: [conversationDeletion]

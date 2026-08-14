@@ -32,7 +32,6 @@
       "default": "./lib/typert.js"
     },
     "./src/*": "./src/*",
-    "./patches/session-menu-slot.patch": "./patches/session-menu-slot.patch",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -45,7 +44,6 @@
     "lib/types/**/*.d.ts",
     "lib/types/**/*.d.ts.map",
     "src",
-    "patches",
     "cordis.patch.yml",
     "README.md",
     "README.zh.md"
@@ -59,8 +57,7 @@
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-primitives",
-        "@deepseek-ai/dsh-client-ui-workspace"
+        "@deepseek-ai/dsh-client-ui-primitives"
       ],
       "platform": "web"
     }
@@ -76,9 +73,9 @@
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.5",
-    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.5",
     "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "devDependencies": {

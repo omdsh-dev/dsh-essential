@@ -1,15 +1,27 @@
 /** Destructive action contributed to the Workspace Session-row menu. */
 
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { DeleteConversationMenuInjected } from './index.ts'
+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { DeletionRequestResult } from './index.ts'
 
-/** Fully composed props for the row-menu contribution. */
-export type DeleteConversationMenuItemProps =
-  PropsRuntime<'sidebar.workspaces.sessionMenu'>
-  & InjectFace<DeleteConversationMenuInjected>
-  & PropsLocale<'essentialDeletion'>
+/** Props supplied by the plugin-owned DOM menu adapter. */
+export interface DeleteConversationMenuItemProps {
+  sessionId: SessionId
+  /** Host-menu extension container that receives only the row action Portal. */
+  menuContainer: Element
+  /** Mark the stable controller as active before the Host can close its menu. */
+  onActivate: () => void
+  /** Cancel the Host's pointer-leave grace timer when this portaled row is entered. */
+  keepMenuOpen: () => void
+  closeMenu: () => void
+  queueDeletion: (sessionId: SessionId) => Promise<DeletionRequestResult>
+  t: TranslateNS<'essentialDeletion'>
+  /** Release the detached menu root after the confirmation card closes. */
+  onFinished?: (() => void) | undefined
+}
 
 /**
  * Confirm and queue deletion for one Session row in a Web-native card.
@@ -18,9 +30,13 @@ export type DeleteConversationMenuItemProps =
  */
 export function DeleteConversationMenuItem({
   sessionId,
+  menuContainer,
+  onActivate,
+  keepMenuOpen,
   closeMenu,
   queueDeletion,
   t,
+  onFinished,
 }: DeleteConversationMenuItemProps) {
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
@@ -30,6 +46,7 @@ export function DeleteConversationMenuItem({
     if (pending) return
     setOpen(false)
     setError(null)
+    onFinished?.()
   }
 
   const confirmDeletion = (): void => {
@@ -39,6 +56,7 @@ export function DeleteConversationMenuItem({
     void queueDeletion(sessionId).then((result) => {
       if (result.kind === 'hidden') {
         setOpen(false)
+        onFinished?.()
         return
       }
       setPending(false)
@@ -54,23 +72,30 @@ export function DeleteConversationMenuItem({
 
   return (
     <>
-      <button
-        type="button"
-        role="menuitem"
-        className="dsh-session-menu-item dsh-session-menu-item-danger"
-        onClick={() => {
-          setError(null)
-          setOpen(true)
-          closeMenu()
-        }}
-      >
-        <span className="dsh-session-menu-item-icon" aria-hidden>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M3.5 4.5h9M6 2.75h4M5 4.5l.5 8.25h5l.5-8.25M6.75 6.5v4.25M9.25 6.5v4.25" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <span>{t('menu.delete')}</span>
-      </button>
+      {createPortal(
+        <button
+          type="button"
+          role="menuitem"
+          className="dsh-essential-menu-item"
+          onPointerEnter={keepMenuOpen}
+          onClick={() => {
+            // This must happen synchronously. The Host can detach its menu
+            // during the same click through blur or pointer-leave handling.
+            onActivate()
+            setError(null)
+            setOpen(true)
+            queueMicrotask(closeMenu)
+          }}
+        >
+          <span className="dsh-essential-menu-item-icon" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M3.5 4.5h9M6 2.75h4M5 4.5l.5 8.25h5l.5-8.25M6.75 6.5v4.25M9.25 6.5v4.25" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span>{t('menu.delete')}</span>
+        </button>,
+        menuContainer,
+      )}
       <Modal
         open={open}
         onClose={closeDialog}

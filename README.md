@@ -10,14 +10,7 @@ DSH currently defines Session persistence as append-only and exposes no deletion
 
 ## Install
 
-This package is a DSH bundle with `cordis.patch.yml` and a Session-menu slot patch. DeepSeek Harness `0.1.0-rc.5` keeps Session row actions inside `ui-workspace`, so apply the slot once to the `deepseek-harness` source tree and rebuild it:
-
-```sh
-git -C /path/to/DSH apply /path/to/dsh-essential/patches/session-menu-slot.patch
-cd /path/to/DSH && pnpm run build
-```
-
-Skip that step when the Host already declares `sidebar.workspaces.sessionMenu`. Then install the bundle into a Web profile with the built Harness CLI:
+This package is a self-contained DSH bundle with `cordis.patch.yml`. It does not patch or rebuild the DeepSeek Harness source tree. Install it into a Web profile with the built Harness CLI:
 
 ```sh
 node /path/to/DSH/apps/cli/lib/bin.js plugin --profile web add /path/to/dsh-essential
@@ -37,6 +30,8 @@ For a direct `cordis.yml` composition, `stateDir` is required and absolute:
 ## Use
 
 Open a Session row's `…` menu and choose **Delete conversation**. The Web UI opens an in-page card titled **Delete this conversation?** with **Cancel / Delete conversation** actions; it no longer uses native browser dialogs. Confirming addresses the clicked Session through the plugin's root Remote (which also works for historical Sessions without a live Agent), then archives the Session so it disappears immediately from every Session grouping surface. Cancelling sends no request.
+
+Until Harness exposes a public Session-menu slot, the plugin observes semantic Session tree rows and portals its React action into the menu DOM from a stable document-level controller. The controller survives Host menu auto-close, so the confirmation card cannot disappear with the menu subtree. A pointer-boundary bridge keeps cross-root movement onto **Delete conversation** inside the Host menu; entering the action also explicitly cancels Host pointer grace when a browser omits `relatedTarget`, while normal pointer-leave dismissal outside it remains intact. Exact identity comes from the row's React owner; a unique visible-title match is the fail-safe fallback. Ambiguous rows are left untouched rather than risking deletion of the wrong Session.
 
 While deletion is pending, the card pins itself open, disables both actions, changes the primary button to **Deleting…**, and shows progress. Failures and queued-but-not-hidden partial outcomes render inside the card. On full success, the disappearing row is the result feedback; no second success popup interrupts the flow.
 
@@ -84,7 +79,6 @@ pnpm run typecheck
 pnpm test
 pnpm run build
 pnpm run prepare
-git -C ../deepseek-harness apply --check "$PWD/patches/session-menu-slot.patch"
 ```
 
 ## Model Experience
@@ -109,4 +103,4 @@ The command neither replaces an existing model-request prefix nor creates an ind
 - **Log move is effective after restart** — the row hides immediately through the durable archive projection, but the running process never moves the target log; this preserves Agent ownership and persistence coordination.
 - **Not permanent erasure** — logs remain in recovery trash until an administrator applies a retention policy.
 - **No sidecar cascade** — independent stores such as message feedback can retain orphan rows because DSH has no cross-domain Session deletion transaction.
-- **Host menu seam required** — DeepSeek Harness `0.1.0-rc.5` needs the bundled `session-menu-slot.patch`; it becomes unnecessary once the Host provides the slot natively.
+- **DOM compatibility boundary** — until Harness ships a public Session-menu slot, the menu action depends on the semantic Session row/menu DOM and an isolated React-owner lookup. If a future Host changes both, the plugin fails closed and the slash command remains available.

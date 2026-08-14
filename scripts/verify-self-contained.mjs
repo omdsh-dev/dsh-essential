@@ -20,7 +20,8 @@ if (pkg.exports?.['./client'] === undefined) problems.push('missing ./client exp
 if (pkg.dsh?.bundle?.patch !== './cordis.patch.yml') problems.push('missing dsh.bundle.patch')
 if (pkg.dsh?.client?.platform !== 'web') problems.push('missing dsh.client web declaration')
 if (!pkg.files?.includes('cordis.patch.yml')) problems.push('files must include cordis.patch.yml')
-if (!pkg.files?.includes('patches')) problems.push('files must include host patches')
+if (pkg.files?.includes('patches')) problems.push('self-contained bundle must not ship host patches')
+if (pkg.exports?.['./patches/session-menu-slot.patch'] !== undefined) problems.push('self-contained bundle must not export a host patch')
 
 if (problems.length > 0) {
   console.error(problems.join('\n'))

@@ -2,13 +2,13 @@
 
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import deletionRemote, { type ConversationDeletionRemoteApi } from '../remote.ts'
-import type {} from './contract.ts'
-import { DeleteConversationMenuItem } from './DeleteConversationMenuItem.tsx'
+import { installDomSessionMenu } from './dom-menu.tsx'
 import { en, zh, type EssentialDeletionKey } from './locales.ts'
 
-export type { SessionMenuOwnerProps } from './contract.ts'
+export type { DeleteConversationMenuItemProps } from './DeleteConversationMenuItem.tsx'
+export type { DomSessionMenuOptions } from './dom-menu.tsx'
 export type { EssentialDeletionKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -16,17 +16,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /** Copy for the recoverable Session deletion menu action. */
     essentialDeletion: EssentialDeletionKey
   }
-}
-
-/** Business face injected into the menu contribution. */
-export interface DeleteConversationMenuInjected {
-  /**
-   * Queue the selected Session through the Host command channel, then hide
-   * it through the durable Workspace archive projection.
-   * @param sessionId - Session addressed by the row.
-   * @returns the combined queue-and-hide outcome.
-   */
-  queueDeletion: (sessionId: SessionId) => Promise<DeletionRequestResult>
 }
 
 /** Browser-visible outcome after the Host has considered a deletion request. */
@@ -38,11 +27,35 @@ export type DeletionRequestResult =
 const NS = 'essentialDeletion'
 
 /** Required browser services. */
-export const inject = ['slots', 'remote', 'workspaces', 'locale']
+export const inject = ['remote', 'workspaces', 'sessions', 'locale']
 
 /**
- * Register one destructive action after the Workspace package declares its
- * Session-menu extension slot.
+ * Queue a deletion through the Host Remote, then archive its list projection.
+ * @param conversationDeletion - root Remote available to historical rows.
+ * @param archiveSession - Workspace projection action.
+ * @param sessionId - target Session.
+ * @returns combined queue-and-hide outcome.
+ */
+export async function queueAndHideConversation(
+  conversationDeletion: ConversationDeletionRemoteApi,
+  archiveSession: (sessionId: SessionId) => Promise<void>,
+  sessionId: SessionId,
+): Promise<DeletionRequestResult> {
+  const response = await conversationDeletion.queue(sessionId)
+  if (!response.ok) {
+    return { kind: 'failed', message: `${response.error.message} (${response.error.code})` }
+  }
+  try {
+    await archiveSession(sessionId)
+  } catch (reason: unknown) {
+    const message = reason instanceof Error ? reason.message : String(reason)
+    return { kind: 'queued', message }
+  }
+  return { kind: 'hidden' }
+}
+
+/**
+ * Install the root Remote and the plugin-owned Session-menu DOM adapter.
  * @param ctx - browser Cordis root.
  */
 export async function apply(ctx: ClientContext): Promise<void> {
@@ -56,26 +69,21 @@ export async function apply(ctx: ClientContext): Promise<void> {
       () => remoteCtx.locale.register(NS, { zh, en }),
       'dsh-essential: dictionaries',
     )
-    remoteCtx.slots.inject('sidebar.workspaces.sessionMenu', () => remoteCtx.slots.register({
-      name: 'sidebar.workspaces.sessionMenu',
-      id: 'essential.deleteConversation',
-      order: 1000,
-      locale: NS,
-      inject: (): DeleteConversationMenuInjected => ({
-        queueDeletion: async (sessionId) => {
-          const response = await conversationDeletion.queue(sessionId)
-          if (!response.ok) {
-            return { kind: 'failed', message: `${response.error.message} (${response.error.code})` }
-          }
-          try {
-            await remoteCtx.workspaces.archiveSession(sessionId)
-          } catch (reason: unknown) {
-            const message = reason instanceof Error ? reason.message : String(reason)
-            return { kind: 'queued', message }
-          }
-          return { kind: 'hidden' }
-        },
-      }),
-    }, DeleteConversationMenuItem))
+    const queueDeletion = (sessionId: SessionId) => queueAndHideConversation(
+      conversationDeletion,
+      id => remoteCtx.workspaces.archiveSession(id),
+      sessionId,
+    )
+    // This mixed host/browser package sees both Cordis `sessions` declarations
+    // during declaration generation. The browser runtime provides the
+    // observable client face here; narrow it at the platform boundary.
+    const sessionList = (remoteCtx.sessions as unknown as {
+      list: { getSnapshot(): SessionListState }
+    }).list
+    remoteCtx.effect(() => installDomSessionMenu({
+      sessions: sessionList,
+      queueDeletion,
+      t: remoteCtx.locale.bind(NS),
+    }), 'dsh-essential: Session menu DOM adapter')
   })
 }
