@@ -1,0 +1,15 @@
+# Mount the recoverable conversation deletion command into a DSH profile.
+- insert:
+    - id: essential-conversation-delete
+      name: '@deepseek-ai/dsh-essential'
+      config:
+        stateDir: !!js dshHomePath('conversation-trash')
+
+# The Web workspace must build its persisted-session index only after pending
+# deletion requests have been recovered. Row-level inject is additive to the
+# workspace plugin's own storageDomain/sessionPersistence requirements. The
+# browser half uses the plugin's root-scoped Remote (historical rows do not
+# require a live Agent), shared Web Modal primitives for confirmation, and the
+# standard workspaces service to archive a queued Session immediately.
+- id: workspace
+  inject: [conversationDeletion]
