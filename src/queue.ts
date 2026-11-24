@@ -13,12 +13,12 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { SessionHeader, SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
-  SessionInspection,
+  SessionPersistence,
   SessionLocation,
 } from '@deepseek-ai/dsh-session-persistence'
 
 const REQUEST_VERSION = 1
-const ARTIFACT_NAME = /^session\.jsonl(?:\.zstd)?$/u
+const ARTIFACT_NAME = /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/u
 
 /** Durable identity and source path captured when deletion is requested. */
 export interface DeletionRequest {
@@ -31,11 +31,7 @@ export interface DeletionRequest {
 }
 
 /** Minimal persistence surface used while recovering pending deletions. */
-export interface DeletionPersistence {
-  list(signal?: AbortSignal): Promise<SessionHeader[]>
-  locate(meta: SessionHeader): SessionLocation | undefined
-  inspect(id: SessionId, signal?: AbortSignal): Promise<SessionInspection>
-}
+export type DeletionPersistence = Pick<SessionPersistence, 'stat' | 'list' | 'open'>
 
 /** One recovery failure retained for a later retry. */
 export interface RecoveryFailure {
@@ -113,6 +109,18 @@ function sameIdentity(header: SessionHeader, request: DeletionRequest): boolean 
   return header.id === request.sessionId
     && header.createdAt === request.createdAt
     && header.cwd === request.cwd
+}
+
+/** A stored fork can still read segments from the parent's JSONL directory. */
+export async function requireNoForkDependents(
+  persistence: Pick<SessionPersistence, 'list'>,
+  sessionId: SessionId,
+  signal?: AbortSignal,
+): Promise<void> {
+  const sessions = await persistence.list(signal === undefined ? undefined : { signal })
+  if (sessions.some(({ header }) => header.isSeeded && header.parentSession === sessionId)) {
+    throw new ConversationDeletionError(`conversation "${sessionId}" is required by a stored fork`)
+  }
 }
 
 function ensureSeparateStateDir(stateDir: string, artifactPath: string): void {
@@ -204,7 +212,6 @@ export async function recoverPendingDeletions(
   const filenames = (await readdir(pendingDir)).filter(name => name.endsWith('.json')).sort()
   if (filenames.length === 0) return Object.freeze({ recovered: [], failures: [] })
 
-  const headers = await persistence.list()
   const recovered: string[] = []
   const failures: RecoveryFailure[] = []
 
@@ -231,24 +238,37 @@ export async function recoverPendingDeletions(
         continue
       }
 
-      const header = headers.find(candidate => sameIdentity(candidate, request))
+      const sessionId = request.sessionId as SessionId
+      const stored = await persistence.stat(sessionId)
+      const header = stored?.header
       if (!sourceExists) {
-        if (header !== undefined) throw new Error('Session still exists but its queued artifact path changed')
+        if (header !== undefined && sameIdentity(header, request)) throw new Error('Session still exists but its queued artifact path changed')
         await unlink(requestFile)
         recovered.push(request.sessionId)
         continue
       }
       if (!await exists(request.artifactPath)) throw new Error('Session artifact is missing from its source directory')
-      if (header === undefined) throw new Error('Session persistence no longer reports the queued lifecycle')
-      const currentLocation = persistence.locate(header)
+      if (header === undefined || !sameIdentity(header, request)) throw new Error('Session persistence no longer reports the queued lifecycle')
+      const currentLocation = stored?.location
       assertJsonlLocation(currentLocation)
       if (resolve(currentLocation.path) !== request.artifactPath) {
         throw new Error('Session artifact location changed after deletion was queued')
       }
-      const inspected = await persistence.inspect(header.id)
-      if (!sameIdentity(inspected.meta, request)) throw new Error('Session identity changed during recovery')
+      // Hold the backend's single-writer lease across validation and the move.
+      const handle = await persistence.open(header.id, 'write')
+      try {
+        if (!sameIdentity(handle.header, request)) throw new Error('Session identity changed during recovery')
+        await requireNoForkDependents(persistence, header.id)
+        const rechecked = await persistence.stat(header.id)
+        if (rechecked === undefined || !sameIdentity(rechecked.header, request)
+          || rechecked.location?.path !== currentLocation.path || rechecked.revision !== stored?.revision) {
+          throw new Error('Session artifact changed during recovery')
+        }
 
-      await rename(sourceDir, targetDir)
+        await rename(sourceDir, targetDir)
+      } finally {
+        await handle.close()
+      }
       await writeRecoveryManifest(targetDir, request)
       await unlink(requestFile)
       recovered.push(request.sessionId)

@@ -3,7 +3,6 @@ import { defineConfig } from 'tsdown'
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
-    invariant: 'src/invariant.ts',
     remote: 'src/remote.ts',
     typert: 'src/typert.ts',
   },

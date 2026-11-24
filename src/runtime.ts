@@ -3,15 +3,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { SessionHeader } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-session'
-import type { SessionLocation } from '@deepseek-ai/dsh-session-persistence'
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { DEFAULT_COMMAND_NAME, resolveConfig, type Config, type ResolvedConfig } from './config.ts'
 import {
   ConversationDeletionError,
   enqueueDeletion,
   recoverPendingDeletions,
+  requireNoForkDependents,
   type RecoveryReport,
 } from './queue.ts'
 
@@ -78,19 +78,18 @@ export class ConversationDeletionRuntime extends TypertRemoteService {
       await this.ctx.sessions.flush(live)
       signal?.throwIfAborted()
     }
-    const header = live?.header ?? await this.findPersistedHeader(sessionId, signal)
+    const stored = await this.ctx.sessionPersistence.stat(sessionId, signal === undefined ? undefined : { signal })
     signal?.throwIfAborted()
-    const location: SessionLocation | undefined = this.ctx.sessionPersistence.locate(header)
-    await enqueueDeletion(this.config.stateDir, header, location)
-    return Object.freeze({ sessionId, state: 'queued' as const })
-  }
-
-  private async findPersistedHeader(sessionId: SessionId, signal?: AbortSignal): Promise<SessionHeader> {
-    const header = (await this.ctx.sessionPersistence.list(signal)).find(candidate => candidate.id === sessionId)
-    if (header === undefined) {
-      throw new ConversationDeletionError(`conversation "${sessionId}" was not found`)
+    if (stored === undefined) {
+      throw new ConversationDeletionError(`conversation "${sessionId}" was not found in persistence`)
     }
-    return header
+    if (live !== undefined && (live.header.createdAt !== stored.header.createdAt || live.header.cwd !== stored.header.cwd)) {
+      throw new ConversationDeletionError(`conversation "${sessionId}" changed before it could be queued`)
+    }
+    await requireNoForkDependents(this.ctx.sessionPersistence, sessionId, signal)
+    signal?.throwIfAborted()
+    await enqueueDeletion(this.config.stateDir, stored.header, stored.location)
+    return Object.freeze({ sessionId, state: 'queued' as const })
   }
 
   private track<T>(operation: Promise<T>): Promise<T> {

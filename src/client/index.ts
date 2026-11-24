@@ -1,14 +1,20 @@
-/** Browser half: Session-row deletion action over the commands Remote. */
+/** Browser half: structured Session-row action and root confirmation dialog. */
 
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import deletionRemote, { type ConversationDeletionRemoteApi } from '../remote.ts'
-import { installDomSessionMenu } from './dom-menu.tsx'
+import type {} from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type {} from '@deepseek-ai/dsh-client-ui-context-menu/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { DeletionDialog, type DeletionDialogInjected } from './DeletionDialog.tsx'
 import { en, zh, type EssentialDeletionKey } from './locales.ts'
 
-export type { DeleteConversationMenuItemProps } from './DeleteConversationMenuItem.tsx'
-export type { DomSessionMenuOptions } from './dom-menu.tsx'
 export type { EssentialDeletionKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -27,7 +33,7 @@ export type DeletionRequestResult =
 const NS = 'essentialDeletion'
 
 /** Required browser services. */
-export const inject = ['remote', 'workspaces', 'sessions', 'locale']
+export const inject = ['remote', 'workspaces', 'locale', 'contextMenus', 'slots']
 
 /**
  * Queue a deletion through the Host Remote, then archive its list projection.
@@ -55,7 +61,7 @@ export async function queueAndHideConversation(
 }
 
 /**
- * Install the root Remote and the plugin-owned Session-menu DOM adapter.
+ * Install the root Remote, Session menu action, and confirmation dialog.
  * @param ctx - browser Cordis root.
  */
 export async function apply(ctx: ClientContext): Promise<void> {
@@ -74,16 +80,34 @@ export async function apply(ctx: ClientContext): Promise<void> {
       id => remoteCtx.workspaces.archiveSession(id),
       sessionId,
     )
-    // This mixed host/browser package sees both Cordis `sessions` declarations
-    // during declaration generation. The browser runtime provides the
-    // observable client face here; narrow it at the platform boundary.
-    const sessionList = (remoteCtx.sessions as unknown as {
-      list: { getSnapshot(): SessionListState }
-    }).list
-    remoteCtx.effect(() => installDomSessionMenu({
-      sessions: sessionList,
-      queueDeletion,
-      t: remoteCtx.locale.bind(NS),
-    }), 'dsh-essential: Session menu DOM adapter')
+    const target = createSnapshotStore<SessionId | null>(null)
+    const t = remoteCtx.locale.bind(NS)
+    remoteCtx.slots.inject('contextMenu.icon', () => remoteCtx.slots.register({
+      name: 'contextMenu.icon', key: 'essential.delete',
+    }, IconTrashOutlineRegular))
+    remoteCtx.effect(() => remoteCtx.contextMenus.register({
+      id: 'essential.delete',
+      target: 'session',
+      order: 700,
+      observe: () => [remoteCtx.locale, target],
+      resolve: ({ sessionId }) => [{
+        id: 'delete',
+        label: t('menu.delete'),
+        icon: { key: 'essential.delete' },
+        danger: true,
+        disabled: target.getSnapshot() !== null,
+        run: () => { if (target.getSnapshot() === null) target.set(sessionId) },
+      }],
+    }), 'dsh-essential: Session deletion menu')
+    remoteCtx.slots.inject('shell.overlay', () => remoteCtx.slots.register({
+      name: 'shell.overlay',
+      id: 'essential.delete',
+      locale: NS,
+      inject: (): DeletionDialogInjected => ({
+        hooks: { deletionTarget: target },
+        close: () => { target.set(null) },
+        queueDeletion,
+      }),
+    }, DeletionDialog))
   })
 }

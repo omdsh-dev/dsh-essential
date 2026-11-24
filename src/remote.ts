@@ -39,14 +39,14 @@ export const queueDeletionInvocation: InvocationDescriptor = {
     codec: {
       mode: 'strict',
       typeSymbol: '@deepseek-ai/dsh-session/types#SessionId',
-      schema: sessionIdSchema,
+      create: () => sessionIdSchema,
     },
   }],
   cancellation: { parameter: 'signal' },
   result: {
     mode: 'strict',
     typeSymbol: '@deepseek-ai/dsh-essential#QueuedConversationDeletion',
-    schema: queuedDeletionSchema,
+    create: () => queuedDeletionSchema,
   },
   sourceLocation: { file: 'src/runtime.ts', line: 58, column: 3 },
 }

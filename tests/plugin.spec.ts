@@ -7,7 +7,6 @@ import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
 import type { CommandDefinition, CommandInvocation } from '@deepseek-ai/dsh-commands'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.ts'
-import * as invariant from '../src/invariant.ts'
 
 const roots: string[] = []
 
@@ -31,7 +30,8 @@ describe('@deepseek-ai/dsh-essential', () => {
     const stateDir = await mkdtemp(join(tmpdir(), 'dsh-essential-plugin-'))
     roots.push(stateDir)
     const header: SessionHeader = Object.freeze({
-      version: 0,
+      version: 4,
+      isSeeded: false,
       id: SessionId('cold-session'),
       createdAt: 42,
       cwd: '/project',
@@ -47,9 +47,8 @@ describe('@deepseek-ai/dsh-essential', () => {
     })
     ctx.provide('sessions', { get: () => undefined })
     ctx.provide('sessionPersistence', {
-      list: () => Promise.resolve([header]),
-      locate: () => ({ kind: 'jsonl', path: join(stateDir, '..', 'logs', 'session.jsonl') }),
-      inspect: () => Promise.resolve({ meta: header, events: [] }),
+      list: async () => [],
+      stat: async () => ({ header, location: { kind: 'jsonl', path: join(stateDir, '..', 'logs', 'session.jsonl') } }),
     })
 
     const fiber = await ctx.plugin(plugin, { stateDir })
@@ -81,9 +80,8 @@ describe('@deepseek-ai/dsh-essential', () => {
     ctx.provide('commands', { register: (candidate: CommandDefinition) => { definition = candidate; return () => {} } })
     ctx.provide('sessions', { get: () => undefined })
     ctx.provide('sessionPersistence', {
-      list: () => Promise.resolve([]),
-      locate: () => undefined,
-      inspect: () => Promise.reject(new Error('not reached')),
+      list: async () => [],
+      stat: async () => undefined,
     })
     const fiber = await ctx.plugin(plugin, { stateDir })
 
@@ -112,9 +110,8 @@ describe('@deepseek-ai/dsh-essential', () => {
     })
     ctx.provide('sessions', { get: () => undefined })
     ctx.provide('sessionPersistence', {
-      list: () => Promise.resolve([]),
-      locate: () => undefined,
-      inspect: () => Promise.reject(new Error('not reached')),
+      list: async () => [],
+      stat: async () => undefined,
     })
 
     const fiber = await ctx.plugin(plugin, { stateDir, commandName: 'remove-chat' })
@@ -137,7 +134,8 @@ describe('@deepseek-ai/dsh-essential', () => {
     roots.push(root)
     const stateDir = join(root, 'state')
     const header: SessionHeader = Object.freeze({
-      version: 0,
+      version: 4,
+      isSeeded: false,
       id: SessionId('current-session'),
       createdAt: 7,
       cwd: '/project',
@@ -149,9 +147,10 @@ describe('@deepseek-ai/dsh-essential', () => {
     ctx.provide('commands', { register: (candidate: CommandDefinition) => { definition = candidate; return () => {} } })
     ctx.provide('sessions', { get: (id: SessionId) => id === header.id ? live : undefined, flush })
     ctx.provide('sessionPersistence', {
-      list: () => Promise.resolve([header]),
-      locate: () => ({ kind: 'jsonl', path: join(root, 'logs', 'session.jsonl') }),
-      inspect: () => Promise.resolve({ meta: header, events: [] }),
+      list: async () => [],
+      stat: async (id: SessionId) => id === header.id
+        ? { header, location: { kind: 'jsonl', path: join(root, 'logs', 'session.jsonl') } }
+        : undefined,
     })
     const fiber = await ctx.plugin(plugin, { stateDir })
 
@@ -164,7 +163,7 @@ describe('@deepseek-ai/dsh-essential', () => {
     expect(flush).toHaveBeenCalledWith(live)
 
     const missing = await definition?.handler({ ...invocation, rawInput: 'missing CONFIRM' })
-    expect(missing).toEqual({ kind: 'error', text: 'conversation "missing" was not found' })
+    expect(missing).toEqual({ kind: 'error', text: 'conversation "missing" was not found in persistence' })
     await fiber.dispose()
   })
 
@@ -180,9 +179,8 @@ describe('@deepseek-ai/dsh-essential', () => {
     ctx.provide('sessions', { get: () => undefined })
     let failList = false
     ctx.provide('sessionPersistence', {
-      list: () => failList ? Promise.reject(new Error('storage offline')) : Promise.resolve([]),
-      locate: () => undefined,
-      inspect: () => Promise.reject(new Error('not reached')),
+      list: async () => [],
+      stat: () => failList ? Promise.reject(new Error('storage offline')) : Promise.resolve(undefined),
     })
     const fiber = await ctx.plugin(plugin, { stateDir })
     expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('retained'))
@@ -194,28 +192,5 @@ describe('@deepseek-ai/dsh-essential', () => {
     } as CommandInvocation)).rejects.toThrow('storage offline')
     await fiber.dispose()
     errorLog.mockRestore()
-  })
-
-  it('registers the invariant companion through its local host contract', async () => {
-    const ctx = new Context()
-    const unregister = vi.fn()
-    let installer: ((ctx: Context, fail: (message: string) => never) => void | Promise<void>) | undefined
-    const register = vi.fn((_packageName: string, candidate: typeof installer) => {
-      installer = candidate
-      return unregister
-    })
-    const removeService = ctx.provide('invariants', { register })
-
-    const fiber = await ctx.plugin(invariant)
-    expect(register.mock.calls[0]?.[0]).toBe('@deepseek-ai/dsh-essential')
-    expect(typeof register.mock.calls[0]?.[1]).toBe('function')
-    await installer?.(ctx, message => { throw new Error(message) })
-    await fiber.dispose()
-    expect(unregister).toHaveBeenCalledTimes(1)
-    await removeService()
-  })
-
-  it('fails direct invariant activation without the host service', async () => {
-    expect(() => invariant.apply(new Context())).toThrow(/requires the "invariants" service/)
   })
 })

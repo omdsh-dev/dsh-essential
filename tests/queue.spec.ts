@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
-import type { SessionInspection, SessionLocation } from '@deepseek-ai/dsh-session-persistence'
+import { SessionPersistenceRevision, type SessionHandle, type SessionLocation } from '@deepseek-ai/dsh-session-persistence'
 import {
   ConversationDeletionError,
   deletionKey,
@@ -23,22 +23,29 @@ async function fixture() {
   roots.push(root)
   const stateDir = join(root, 'state')
   const sourceDir = join(root, 'sessions', 'project', 'session-id')
-  const artifactPath = join(sourceDir, 'session.jsonl')
+  const artifactName = 'session.v4.jsonl'
+  const artifactPath = join(sourceDir, artifactName)
   await mkdir(sourceDir, { recursive: true })
-  await writeFile(artifactPath, '{"version":0}\n', 'utf8')
+  await writeFile(artifactPath, '{"version":4}\n', 'utf8')
   const header: SessionHeader = Object.freeze({
-    version: 0,
+    version: 4,
+    isSeeded: false,
     id: SessionId('session-id'),
     createdAt: 123,
     cwd: '/project',
   })
   const location: SessionLocation = { kind: 'jsonl', path: artifactPath }
+  const revision = SessionPersistenceRevision('test-revision')
   const persistence: DeletionPersistence = {
-    list: () => Promise.resolve([header]),
-    locate: () => location,
-    inspect: () => Promise.resolve({ meta: header, events: [] } satisfies SessionInspection),
+    list: async () => [],
+    stat: async () => ({ header, revision, location }),
+    open: async () => readHandle(header),
   }
-  return { root, stateDir, sourceDir, artifactPath, header, location, persistence }
+  return { root, stateDir, sourceDir, artifactPath, artifactName, header, location, revision, persistence }
+}
+
+function readHandle(header: SessionHeader): SessionHandle {
+  return { header, close: async () => {} } as SessionHandle
 }
 
 describe('conversation deletion queue', () => {
@@ -62,12 +69,28 @@ describe('conversation deletion queue', () => {
     expect(report).toEqual({ recovered: ['session-id'], failures: [] })
     await expect(readdir(f.sourceDir)).rejects.toMatchObject({ code: 'ENOENT' })
     const trash = join(f.stateDir, 'trash', deletionKey('session-id', 123))
-    expect(await readFile(join(trash, 'session.jsonl'), 'utf8')).toBe('{"version":0}\n')
+    expect(await readFile(join(trash, f.artifactName), 'utf8')).toBe('{"version":4}\n')
     expect(JSON.parse(await readFile(join(trash, 'deletion.json'), 'utf8'))).toMatchObject({
       sessionId: 'session-id',
       originalDirectory: f.sourceDir,
     })
     expect(await readdir(join(f.stateDir, 'pending'))).toEqual([])
+  })
+
+  it('retains a queued log that a newly stored fork may still reference', async () => {
+    const f = await fixture()
+    await enqueueDeletion(f.stateDir, f.header, f.location)
+    const report = await recoverPendingDeletions(f.stateDir, {
+      ...f.persistence,
+      list: async () => [{
+        header: { ...f.header, id: SessionId('child'), isSeeded: true, parentSession: f.header.id },
+        revision: f.revision,
+      }],
+    })
+    expect(report.recovered).toEqual([])
+    expect(report.failures[0]?.message).toContain('required by a stored fork')
+    expect(await readdir(f.sourceDir)).toContain(f.artifactName)
+    expect(await readdir(join(f.stateDir, 'pending'))).toHaveLength(1)
   })
 
   it('finishes a crash recovery when the deterministic trash target already exists', async () => {
@@ -82,7 +105,7 @@ describe('conversation deletion queue', () => {
 
     const report = await recoverPendingDeletions(f.stateDir, {
       ...f.persistence,
-      list: () => Promise.resolve([]),
+      stat: async () => undefined,
     })
     expect(report).toEqual({ recovered: ['session-id'], failures: [] })
     expect(JSON.parse(await readFile(join(trash, 'deletion.json'), 'utf8'))).toMatchObject({
@@ -95,12 +118,12 @@ describe('conversation deletion queue', () => {
     await enqueueDeletion(f.stateDir, f.header, f.location)
     const report = await recoverPendingDeletions(f.stateDir, {
       ...f.persistence,
-      list: () => Promise.resolve([{ ...f.header, createdAt: 999 }]),
+      stat: async () => ({ header: { ...f.header, createdAt: 999 }, location: f.location, revision: f.revision }),
     })
     expect(report.recovered).toEqual([])
     expect(report.failures[0]?.message).toMatch(/no longer reports the queued lifecycle/)
     expect(await readdir(join(f.stateDir, 'pending'))).toHaveLength(1)
-    expect(await readFile(f.artifactPath, 'utf8')).toBe('{"version":0}\n')
+    expect(await readFile(f.artifactPath, 'utf8')).toBe('{"version":4}\n')
   })
 
   it('retains a request while the target Session is live during HMR', async () => {
@@ -108,7 +131,7 @@ describe('conversation deletion queue', () => {
     await enqueueDeletion(f.stateDir, f.header, f.location)
     const report = await recoverPendingDeletions(f.stateDir, f.persistence, id => id === 'session-id')
     expect(report.failures[0]?.message).toMatch(/live in this process/)
-    expect(await readFile(f.artifactPath, 'utf8')).toBe('{"version":0}\n')
+    expect(await readFile(f.artifactPath, 'utf8')).toBe('{"version":4}\n')
   })
 
   it('rejects backends without a per-Session JSONL artifact', async () => {
@@ -145,7 +168,7 @@ describe('conversation deletion queue', () => {
       'request filename does not match its Session identity',
     ]))
     expect(report.failures).toHaveLength(3)
-    expect(await readFile(f.artifactPath, 'utf8')).toBe('{"version":0}\n')
+    expect(await readFile(f.artifactPath, 'utf8')).toBe('{"version":4}\n')
   })
 
   it('retires a request when its source is already absent and persistence agrees', async () => {
@@ -154,7 +177,7 @@ describe('conversation deletion queue', () => {
     await rm(f.sourceDir, { recursive: true, force: true })
     const report = await recoverPendingDeletions(f.stateDir, {
       ...f.persistence,
-      list: () => Promise.resolve([]),
+      stat: async () => undefined,
     })
     expect(report).toEqual({ recovered: ['session-id'], failures: [] })
   })
@@ -178,7 +201,10 @@ describe('conversation deletion queue', () => {
     await enqueueDeletion(moved.stateDir, moved.header, moved.location)
     const movedReport = await recoverPendingDeletions(moved.stateDir, {
       ...moved.persistence,
-      locate: () => ({ kind: 'jsonl', path: join(moved.root, 'elsewhere', 'session.jsonl') }),
+      stat: async () => ({
+        header: moved.header, revision: moved.revision,
+        location: { kind: 'jsonl', path: join(moved.root, 'elsewhere', 'session.jsonl') },
+      }),
     })
     expect(movedReport.failures[0]?.message).toMatch(/location changed/)
   })
@@ -188,7 +214,7 @@ describe('conversation deletion queue', () => {
     await enqueueDeletion(changed.stateDir, changed.header, changed.location)
     const changedReport = await recoverPendingDeletions(changed.stateDir, {
       ...changed.persistence,
-      inspect: () => Promise.resolve({ meta: { ...changed.header, createdAt: 999 }, events: [] }),
+      open: async () => readHandle({ ...changed.header, createdAt: 999 }),
     })
     expect(changedReport.failures[0]?.message).toMatch(/identity changed/)
 

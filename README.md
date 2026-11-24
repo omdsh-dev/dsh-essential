@@ -1,5 +1,7 @@
 # dsh-essential
 
+**Compatibility**: DeepSeek Harness `0.2.3-alpha.2`, using Node.js `^24.22.3 || >=26.13.1`.
+
 **English** | [中文](README.zh.md)
 
 A recoverable conversation-deletion plugin for DeepSeek Harness. It contributes **Delete conversation** to each Session row menu and also registers `/delete-conversation`. After explicit confirmation, the selected Session lifecycle is queued and immediately hidden through the Workspace's durable archive projection; on the next DSH start its JSONL directory is atomically moved into recovery trash before the Web Workspace builds its index.
@@ -31,7 +33,7 @@ For a direct `cordis.yml` composition, `stateDir` is required and absolute:
 
 Open a Session row's `…` menu and choose **Delete conversation**. The Web UI opens an in-page card titled **Delete this conversation?** with **Cancel / Delete conversation** actions; it no longer uses native browser dialogs. Confirming addresses the clicked Session through the plugin's root Remote (which also works for historical Sessions without a live Agent), then archives the Session so it disappears immediately from every Session grouping surface. Cancelling sends no request.
 
-Until Harness exposes a public Session-menu slot, the plugin observes semantic Session tree rows and portals its React action into the menu DOM from a stable document-level controller. The controller survives Host menu auto-close, so the confirmation card cannot disappear with the menu subtree. A pointer-boundary bridge keeps cross-root movement onto **Delete conversation** inside the Host menu; entering the action also explicitly cancels Host pointer grace when a browser omits `relatedTarget`, while normal pointer-leave dismissal outside it remains intact. Exact identity comes from the row's React owner; a unique visible-title match is the fail-safe fallback. Ambiguous rows are left untouched rather than risking deletion of the wrong Session.
+The menu uses the native DSH Session menu and passes the clicked Session ID to a root confirmation dialog.
 
 While deletion is pending, the card pins itself open, disables both actions, changes the primary button to **Deleting…**, and shows progress. Failures and queued-but-not-hidden partial outcomes render inside the card. On full success, the disappearing row is the result feedback; no second success popup interrupts the flow.
 
@@ -59,6 +61,8 @@ After the command succeeds, restart DSH. The next boot moves the log to `<stateD
 | `commandName` | string | `delete-conversation` | Optional human-command alias without `/`; the menu always uses stable `/delete-conversation`. |
 
 ## Safety and recovery
+
+A session that is still the source of a stored fork cannot be moved to recovery trash.
 
 - The literal `CONFIRM` is mandatory.
 - Requests bind `sessionId`, `createdAt`, and `cwd`, preventing a reused id from deleting a newer lifecycle.
@@ -103,4 +107,3 @@ The command neither replaces an existing model-request prefix nor creates an ind
 - **Log move is effective after restart** — the row hides immediately through the durable archive projection, but the running process never moves the target log; this preserves Agent ownership and persistence coordination.
 - **Not permanent erasure** — logs remain in recovery trash until an administrator applies a retention policy.
 - **No sidecar cascade** — independent stores such as message feedback can retain orphan rows because DSH has no cross-domain Session deletion transaction.
-- **DOM compatibility boundary** — until Harness ships a public Session-menu slot, the menu action depends on the semantic Session row/menu DOM and an isolated React-owner lookup. If a future Host changes both, the plugin fails closed and the slash command remains available.
